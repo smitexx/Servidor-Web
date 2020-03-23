@@ -14,6 +14,8 @@
 #include <time.h>
 #include <sys/time.h>
 
+#define POST 12
+#define GET 13
 #define VERSION 24
 #define BUFSIZE 8096
 #define ERROR 42
@@ -54,6 +56,7 @@ struct request
 	char *tipo;
 	char *archivo;
 	char *protocolo;
+	int cookieContador;
 };
 void parser_first_line(char *linea, struct request *pet)
 {
@@ -65,6 +68,12 @@ void parser_first_line(char *linea, struct request *pet)
 	pet->archivo = ptr;
 	ptr = strtok_r(NULL, "\r", &saveptr2);
 	pet->protocolo = ptr;
+}
+int parser_cookie(char *cookie)
+{
+	char *numero = strrchr(cookie, '=') + 1;
+	int	accesos = *numero - '0';
+	return accesos;
 }
 void debug(int log_message_type, char *message, char *additional_info, int socket_fd)
 {
@@ -192,7 +201,7 @@ void mandar_error(int error, int fd, struct request peticion)
 	//Connection
 	strcat(buff_respuesta, "Connection: Keep-Alive\r\n");
 	//Keep Alive
-	strcat(buff_respuesta, "Keep-Alive: timeout=10, max=100\r\n");
+	strcat(buff_respuesta, "Keep-Alive: timeout=60, max=100\r\n");
 	//Tipo de fichero
 	strcat(buff_respuesta, "Content-Type: ");
 	strcat(buff_respuesta, extensions[extension].filetype);
@@ -224,6 +233,7 @@ void mandar_respuesta(char *ruta, int descriptorFichero, int tipoMensaje, struct
 {
 	char buff_fecha[256] = {0};
 	char tamano[256] = {0};
+	char cookie[256] = {0};
 	char buff_respuesta[BUFSIZE] = {0};
 	int bytesRespuesta = 0;
 	time_t fecha = time(NULL);
@@ -242,7 +252,7 @@ void mandar_respuesta(char *ruta, int descriptorFichero, int tipoMensaje, struct
 		printf("Protocolo distinto de http 1.1 (NO SOPORTADO) \n");
 		mandar_error(VERSION_NOTSUPPORTED, descriptorFichero, peticion);
 	}
-	if (tipoMensaje == 1)
+	if (tipoMensaje == GET)
 	{
 		//comprobamos que no intente acceder a estructura superior de ficheros
 		if (strncmp(peticion.archivo, "../", 3) == 0)
@@ -293,11 +303,14 @@ void mandar_respuesta(char *ruta, int descriptorFichero, int tipoMensaje, struct
 			//Connection
 			strcat(buff_respuesta, "Connection: Keep-Alive\r\n");
 			//Keep Alive
-			strcat(buff_respuesta, "Keep-Alive: timeout=10, max=100\r\n");
+			strcat(buff_respuesta, "Keep-Alive: timeout=60, max=100\r\n");
 			//Tipo de fichero
 			strcat(buff_respuesta, "Content-Type: ");
 			strcat(buff_respuesta, extensions[tipoExt].filetype);
 			strcat(buff_respuesta, "\r\n");
+			//Cookie
+			sprintf(cookie, "Set-Cookie: accesos=%d; max-age=120 \r\n", peticion.cookieContador);
+			strcat(buff_respuesta, cookie);
 			//Cierre de cabecera
 			strcat(buff_respuesta, "\r\n");
 			//Mandamos la cabecera de la respuesta
@@ -337,12 +350,12 @@ void process_web_request(int descriptorFichero)
 	struct request peticion;
 	peticion.tipo = "";
 	peticion.archivo = "";
-	peticion.protocolo ="";
+	peticion.protocolo = "";
+	peticion.cookieContador = 0;
 	//
 	// Leer la petición HTTP
-
 	ssize_t count = read(descriptorFichero, buff_peticion, BUFSIZE);
-	printf("%s\n", buff_peticion);
+
 	// Comprobación de errores de lectura
 	if (count < 0)
 	{
@@ -358,9 +371,9 @@ void process_web_request(int descriptorFichero)
 	//SEGUIMOS CON EL RESTO DE LA PETICION
 	token_linea = strtok_r(NULL, "\r\n", &saveptr1);
 	char *aux_token;
-	printf ("tipo:%s archivo:%s protocolo:%s \n", peticion.tipo, peticion.archivo, peticion.protocolo);
 	//Comprobamos que no sea una bad request
-	if (peticion.tipo == NULL || peticion.archivo == NULL || peticion.protocolo == NULL){
+	if (peticion.tipo == NULL || peticion.archivo == NULL || peticion.protocolo == NULL)
+	{
 		mandar_error(BAD_REQUEST, descriptorFichero, peticion);
 	}
 	//Parsear el post
@@ -385,19 +398,45 @@ void process_web_request(int descriptorFichero)
 		{
 			ruta = "./no_accion.html";
 		}
-		mandar_respuesta(ruta, descriptorFichero, 0, peticion);
+		mandar_respuesta(ruta, descriptorFichero, POST, peticion);
 	} //Parsear el get
 	else if (strcmp(peticion.tipo, "GET") == 0)
 	{
+		int isHost = 0;
+		while (token_linea != NULL)
+		{
+			printf("%s\n", token_linea);
+			if (strncmp(token_linea, "Host: ", 6) == 0)
+			{
+				isHost = 1;
+				printf("Cabecera host encontrada: %s\n", token_linea);
+			}
+			if (strncmp(token_linea, "Cookie: ", 8) == 0)
+			{
+				peticion.cookieContador = parser_cookie(token_linea);
+				printf("peticion: %d\n", peticion.cookieContador);
+			}
+			token_linea = "";
+			token_linea = strtok_r(NULL, "\r\n", &saveptr1);
+		}
+		//Cookie
+		if (peticion.cookieContador + 1 > 9) //si supera el limite de accesos mandamos 429
+		{
+			mandar_error(BAD_REQUEST, descriptorFichero, peticion);
+		}else 
+			peticion.cookieContador += 1;
+		if (!isHost)
+		{
+			mandar_error(BAD_REQUEST, descriptorFichero, peticion);
+		}
 		char ruta[PATH_MAX] = {0};
 		strcat(ruta, ".");
 		strcat(ruta, peticion.archivo);
 		//Como se trata el caso de acceso ilegal a directorios superiores de la jerarquia de directorios del sistema
-		mandar_respuesta(ruta, descriptorFichero, 1, peticion);
+		mandar_respuesta(ruta, descriptorFichero, GET, peticion);
 	}
 	else
 	{
-		debug(NOIMPLEMENTADO, "peticion no implementada", "not implemented", descriptorFichero);
 		mandar_error(NOIMPLEMENTADO, descriptorFichero, peticion);
 	}
 }
@@ -474,14 +513,14 @@ int main(int argc, char **argv)
 				(void)close(listenfd);
 				struct timeval timeout;
 				fd_set rfds;
-				timeout.tv_sec = 10;
+				timeout.tv_sec = 60;
 				timeout.tv_usec = 0;
 				FD_ZERO(&rfds);
 				FD_SET(socketfd, &rfds);
 				while (select(socketfd + 1, &rfds, NULL, NULL, &timeout))
 				{
 					process_web_request(socketfd); // El hijo termina tras llamar a esta función
-					timeout.tv_sec = 10;
+					timeout.tv_sec = 60;
 				}
 				close(socketfd);
 				exit(1);

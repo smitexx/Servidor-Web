@@ -24,6 +24,7 @@
 #define PROHIBIDO 403
 #define NOENCONTRADO 404
 #define NOACEPTABLE 406
+#define MANY_REQUESTS 429
 #define NOIMPLEMENTADO 501
 #define VERSION_NOTSUPPORTED 505
 
@@ -31,6 +32,7 @@ static char fich_badrequest[] = "errores/400.html";
 static char fich_notfound[] = "errores/404.html";
 static char fich_forbidden[] = "errores/403.html";
 static char fich_notaccept[] = "errores/406.html";
+static char fich_manyrequest[] = "errores/429.html";
 static char fich_notimplemented[] = "errores/501.html";
 static char fich_version[] = "errores/505.html";
 
@@ -72,7 +74,7 @@ void parser_first_line(char *linea, struct request *pet)
 int parser_cookie(char *cookie)
 {
 	char *numero = strrchr(cookie, '=') + 1;
-	int	accesos = *numero - '0';
+	int accesos = *numero - '0';
 	return accesos;
 }
 void debug(int log_message_type, char *message, char *additional_info, int socket_fd)
@@ -86,7 +88,7 @@ void debug(int log_message_type, char *message, char *additional_info, int socke
 		(void)sprintf(logbuffer, "ERROR: %s:%s Errno=%d exiting pid=%d", message, additional_info, errno, getpid());
 		break;
 	case BAD_REQUEST:
-		// Enviar como respuesta 403 Forbidden
+		// Enviar como respuesta 400 Forbidden
 		(void)sprintf(logbuffer, "BAD-REQUEST: %s:%s", message, additional_info);
 		break;
 	case PROHIBIDO:
@@ -100,6 +102,10 @@ void debug(int log_message_type, char *message, char *additional_info, int socke
 	case NOACEPTABLE:
 		// Enviar como respuesta 406 No ACEPTABLE
 		(void)sprintf(logbuffer, "NOT ACCEPTED: %s:%s", message, additional_info);
+		break;
+	case MANY_REQUESTS:
+		// Enviar como respuesta 429 No ACEPTABLE
+		(void)sprintf(logbuffer, "TOO MANY REQUESTS: %s:%s", message, additional_info);
 		break;
 	case NOIMPLEMENTADO:
 		// Enviar como respuesta 501 No IMPLEMENTADO
@@ -171,6 +177,15 @@ void mandar_error(int error, int fd, struct request peticion)
 		file = fopen(fich_notaccept, "r");
 		strcat(buff_respuesta, " 406 Not Acceptable\r\n");
 		break;
+	case MANY_REQUESTS:
+		if (stat(fich_manyrequest, &info_fichero) < 0)
+		{
+			debug(NOENCONTRADO, "fichero no encontrado", "not found", fd);
+		}
+		debug(MANY_REQUESTS, "demasiadas peticiones realizadas por el usuario", "too many requests", fd);
+		file = fopen(fich_manyrequest, "r");
+		strcat(buff_respuesta, " 429 Too Many Requests\r\n");
+		break;
 	case NOIMPLEMENTADO:
 		if (stat(fich_notimplemented, &info_fichero) < 0)
 		{
@@ -201,7 +216,7 @@ void mandar_error(int error, int fd, struct request peticion)
 	//Connection
 	strcat(buff_respuesta, "Connection: Keep-Alive\r\n");
 	//Keep Alive
-	strcat(buff_respuesta, "Keep-Alive: timeout=60, max=100\r\n");
+	strcat(buff_respuesta, "Keep-Alive: timeout=30, max=100\r\n");
 	//Tipo de fichero
 	strcat(buff_respuesta, "Content-Type: ");
 	strcat(buff_respuesta, extensions[extension].filetype);
@@ -243,13 +258,11 @@ void mandar_respuesta(char *ruta, int descriptorFichero, int tipoMensaje, struct
 	//Comprobamos que exista el fichero
 	if (stat(ruta, &info_fichero) < 0)
 	{
-		printf("fichero no encontrado\n");
 		mandar_error(NOENCONTRADO, descriptorFichero, peticion);
 	}
 	//Comprobamos si es HTTP 1.1.
 	if (strcmp(peticion.protocolo, "HTTP/1.1") != 0)
 	{
-		printf("Protocolo distinto de http 1.1 (NO SOPORTADO) \n");
 		mandar_error(VERSION_NOTSUPPORTED, descriptorFichero, peticion);
 	}
 	if (tipoMensaje == GET)
@@ -303,7 +316,7 @@ void mandar_respuesta(char *ruta, int descriptorFichero, int tipoMensaje, struct
 			//Connection
 			strcat(buff_respuesta, "Connection: Keep-Alive\r\n");
 			//Keep Alive
-			strcat(buff_respuesta, "Keep-Alive: timeout=60, max=100\r\n");
+			strcat(buff_respuesta, "Keep-Alive: timeout=30, max=100\r\n");
 			//Tipo de fichero
 			strcat(buff_respuesta, "Content-Type: ");
 			strcat(buff_respuesta, extensions[tipoExt].filetype);
@@ -376,18 +389,46 @@ void process_web_request(int descriptorFichero)
 	{
 		mandar_error(BAD_REQUEST, descriptorFichero, peticion);
 	}
+	int isHost = 0;
+	char *email = "";
+	while (token_linea != NULL)
+	{
+		if (strncmp(token_linea, "Host: ", 6) == 0)
+		{
+			isHost = 1;
+		}
+		if (strncmp(token_linea, "Cookie: ", 8) == 0)
+		{
+			peticion.cookieContador = parser_cookie(token_linea);
+		}
+		email = token_linea;
+		token_linea = "";
+		token_linea = strtok_r(NULL, "\r\n", &saveptr1);
+	}
+	//Cabecera host es necesaria
+	if (!isHost)
+	{
+		mandar_error(BAD_REQUEST, descriptorFichero, peticion);
+	}
+	//Cookie
+	if (peticion.cookieContador + 1 > 9) //si supera el limite de accesos mandamos 429
+	{
+		mandar_error(MANY_REQUESTS, descriptorFichero, peticion);
+	}
+	else
+		peticion.cookieContador += 1;
 	//Parsear el post
 	if (strcmp(peticion.tipo, "POST") == 0)
 	{
-		while (token_linea != NULL)
+		/*while (token_linea != NULL)
 		{
 			token_linea = strtok_r(NULL, "\r\n", &saveptr1);
 			if (token_linea != NULL)
 			{
 				aux_token = token_linea;
 			}
-		}
-		char *email = strrchr(aux_token, '=');
+		}*/
+		email = strrchr(email, '=');
 		email = email + 1;
 		char *ruta;
 		if (strcmp(email, "arturo.lorenzoh%40um.es") == 0)
@@ -402,33 +443,6 @@ void process_web_request(int descriptorFichero)
 	} //Parsear el get
 	else if (strcmp(peticion.tipo, "GET") == 0)
 	{
-		int isHost = 0;
-		while (token_linea != NULL)
-		{
-			printf("%s\n", token_linea);
-			if (strncmp(token_linea, "Host: ", 6) == 0)
-			{
-				isHost = 1;
-				printf("Cabecera host encontrada: %s\n", token_linea);
-			}
-			if (strncmp(token_linea, "Cookie: ", 8) == 0)
-			{
-				peticion.cookieContador = parser_cookie(token_linea);
-				printf("peticion: %d\n", peticion.cookieContador);
-			}
-			token_linea = "";
-			token_linea = strtok_r(NULL, "\r\n", &saveptr1);
-		}
-		//Cookie
-		if (peticion.cookieContador + 1 > 9) //si supera el limite de accesos mandamos 429
-		{
-			mandar_error(BAD_REQUEST, descriptorFichero, peticion);
-		}else 
-			peticion.cookieContador += 1;
-		if (!isHost)
-		{
-			mandar_error(BAD_REQUEST, descriptorFichero, peticion);
-		}
 		char ruta[PATH_MAX] = {0};
 		strcat(ruta, ".");
 		strcat(ruta, peticion.archivo);
@@ -513,14 +527,14 @@ int main(int argc, char **argv)
 				(void)close(listenfd);
 				struct timeval timeout;
 				fd_set rfds;
-				timeout.tv_sec = 60;
+				timeout.tv_sec = 30;
 				timeout.tv_usec = 0;
 				FD_ZERO(&rfds);
 				FD_SET(socketfd, &rfds);
 				while (select(socketfd + 1, &rfds, NULL, NULL, &timeout))
 				{
 					process_web_request(socketfd); // El hijo termina tras llamar a esta función
-					timeout.tv_sec = 60;
+					timeout.tv_sec = 30;
 				}
 				close(socketfd);
 				exit(1);

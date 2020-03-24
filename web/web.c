@@ -420,14 +420,6 @@ void process_web_request(int descriptorFichero)
 	//Parsear el post
 	if (strcmp(peticion.tipo, "POST") == 0)
 	{
-		/*while (token_linea != NULL)
-		{
-			token_linea = strtok_r(NULL, "\r\n", &saveptr1);
-			if (token_linea != NULL)
-			{
-				aux_token = token_linea;
-			}
-		}*/
 		email = strrchr(email, '=');
 		email = email + 1;
 		char *ruta;

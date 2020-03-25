@@ -148,7 +148,7 @@ void mandar_error(int error, int fd, struct request peticion)
 		}
 		debug(BAD_REQUEST, "peticion mal formada", "bad request", fd);
 		file = fopen(fich_badrequest, "rb");
-		strcat(buff_respuesta, " 400 Not Found\r\n");
+		strcat(buff_respuesta, " 400 Bad Request\r\n");
 		break;
 	case NOENCONTRADO:
 		if (stat(fich_notfound, &info_fichero) < 0)
@@ -216,7 +216,7 @@ void mandar_error(int error, int fd, struct request peticion)
 	//Connection
 	strcat(buff_respuesta, "Connection: Keep-Alive\r\n");
 	//Keep Alive
-	strcat(buff_respuesta, "Keep-Alive: timeout=30, max=100\r\n");
+	strcat(buff_respuesta, "Keep-Alive: timeout=20, max=100\r\n");
 	//Tipo de fichero
 	strcat(buff_respuesta, "Content-Type: ");
 	strcat(buff_respuesta, extensions[extension].filetype);
@@ -316,7 +316,7 @@ void mandar_respuesta(char *ruta, int descriptorFichero, int tipoMensaje, struct
 			//Connection
 			strcat(buff_respuesta, "Connection: Keep-Alive\r\n");
 			//Keep Alive
-			strcat(buff_respuesta, "Keep-Alive: timeout=30, max=100\r\n");
+			strcat(buff_respuesta, "Keep-Alive: timeout=20, max=100\r\n");
 			//Tipo de fichero
 			strcat(buff_respuesta, "Content-Type: ");
 			strcat(buff_respuesta, extensions[tipoExt].filetype);
@@ -519,14 +519,14 @@ int main(int argc, char **argv)
 				(void)close(listenfd);
 				struct timeval timeout;
 				fd_set rfds;
-				timeout.tv_sec = 30;
+				timeout.tv_sec = 20;
 				timeout.tv_usec = 0;
 				FD_ZERO(&rfds);
 				FD_SET(socketfd, &rfds);
 				while (select(socketfd + 1, &rfds, NULL, NULL, &timeout))
 				{
 					process_web_request(socketfd); // El hijo termina tras llamar a esta función
-					timeout.tv_sec = 30;
+					timeout.tv_sec = 20;
 				}
 				close(socketfd);
 				exit(1);
